@@ -11,8 +11,9 @@ load_dotenv()
 
 from db import init_db, get_unprocessed_messages, mark_processed, cleanup_old_messages
 from tg_reader import read_chats_today
-from recap import generate_daily_recap, generate_status_snapshot
+from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot
 from gdocs import append_recap, remove_old_recaps, overwrite_status_doc, read_recap_doc
+from sheet_sync import sync_rows
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Dubai"))
 
@@ -43,6 +44,12 @@ async def daily_recap_job():
         else:
             print("[main] RECAP_DOC_ID not set, printing recap:")
             print(recap_text)
+
+        # Sync structured data to Google Sheet
+        structured = generate_structured_recap(messages)
+        if structured:
+            sync_rows(structured)
+            print(f"[main] Sheet synced ({len(structured)} topics)")
 
         await mark_processed(today)
 

@@ -1,19 +1,33 @@
+import json
 import os
 import anthropic
 
 SYSTEM_PROMPT = (
     "Ты помощник директора по международному развитию beauty-бренда The Act Perfumes (Dubai). "
-    "Рынки: MENA, Африка, США (в разработке)."
+    "Рынки: MENA, Африка, США (в разработке). "
+    "Твоя задача — делать деловые рекапы переписок. Только факты, конкретика, без воды."
 )
 
-DAILY_PROMPT = """Сделай деловой рекап переписки за сегодня. Только факты, без воды.
+DAILY_PROMPT = """Проанализируй переписки за сегодня и составь структурированный рекап по каждому контакту.
 
-Структура:
-✅ Решения принятые
-📋 Задачи поставлены (кто отвечает)
-🤝 Статус переговоров
-❓ Открытые вопросы
-➡️ Приоритеты на завтра
+Для каждого контакта/чата отдельный блок:
+
+**👤 Контакт:** имя и роль (если понятна из контекста)
+
+**📌 Темы и решения:**
+Для каждой темы:
+- Тема
+- Статус: ✅ Решено / ⏳ В процессе / ❓ Открыто
+- Суть: что обсуждали
+- Итог: к чему пришли
+
+**⚠️ Открытые вопросы** (что требует действий)
+
+**➡️ Следующие шаги** (конкретно кто и что должен сделать)
+
+---
+
+Если сообщений мало или они формальные (приветствия, "спасибо") — просто кратко отметь суть контакта, не раздувай.
 
 Переписка:
 {messages_by_chat}"""
@@ -41,6 +55,26 @@ def _format_messages(by_chat: dict[str, list[str]]) -> str:
     return "\n".join(parts)
 
 
+STRUCTURED_PROMPT = """Проанализируй переписки и верни JSON массив тем.
+
+Каждая тема — объект:
+{{
+  "contact": "имя контакта",
+  "role": "роль (если понятна)",
+  "topic": "название темы",
+  "status": "Решено / В процессе / Открыто",
+  "summary": "суть обсуждения (1-2 предложения)",
+  "result": "к чему пришли",
+  "next_step": "что нужно сделать",
+  "responsible": "кто отвечает"
+}}
+
+Если переписка формальная — верни 1 элемент с topic "Общение" и кратким summary.
+
+Переписка:
+{messages}"""
+
+
 def generate_daily_recap(messages_by_chat: dict[str, list[str]]) -> str:
     if not messages_by_chat:
         return "Нет сообщений за сегодня."
@@ -57,6 +91,40 @@ def generate_daily_recap(messages_by_chat: dict[str, list[str]]) -> str:
         ],
     )
     return response.content[0].text
+
+
+def generate_structured_recap(messages_by_chat: dict[str, list[str]]) -> list[dict]:
+    """Generate structured recap as list of dicts for sheet sync."""
+    if not messages_by_chat:
+        return []
+
+    formatted = _format_messages(messages_by_chat)
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        system=(
+            "Ты помощник директора по международному развитию beauty-бренда The Act Perfumes (Dubai). "
+            "Отвечай ТОЛЬКО валидным JSON массивом, без markdown, без ```json, без пояснений."
+        ),
+        messages=[
+            {"role": "user", "content": STRUCTURED_PROMPT.format(messages=formatted)}
+        ],
+    )
+
+    text = response.content[0].text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print(f"[recap] JSON parse error: {text[:200]}")
+        return []
 
 
 def generate_status_snapshot(recaps_text: str) -> str:
