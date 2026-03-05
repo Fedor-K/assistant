@@ -14,6 +14,7 @@ from tg_reader import read_chats_today
 from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot, generate_done_report, check_duplicates
 from gdocs import append_recap, remove_old_recaps, overwrite_status_doc, read_recap_doc
 from sheet_sync import sync_rows, get_existing_topics, get_done_tasks
+from email_reader import read_emails_today, format_emails_for_recap
 from docx_export import save_recap_docx
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Dubai"))
@@ -51,9 +52,18 @@ async def daily_recap_job():
         else:
             print("[main] No completed tasks for report")
 
-        # Sync structured data to Google Sheet (only new messages)
+        # Read emails and merge with TG messages
+        emails = read_emails_today()
+        email_text = format_emails_for_recap(emails)
+
+        # Merge: add email text as a virtual "chat"
+        all_sources = dict(new_messages)
+        if email_text:
+            all_sources["Почта (Email)"] = [email_text]
+
+        # Sync structured data to Google Sheet
         existing_topics = get_existing_topics()
-        structured = generate_structured_recap(new_messages, existing_topics=existing_topics)
+        structured = generate_structured_recap(all_sources, existing_topics=existing_topics)
         if structured:
             # Check new items for duplicates
             structured = check_duplicates(structured, existing_topics)
