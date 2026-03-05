@@ -160,6 +160,24 @@ def sync_rows(new_rows: list[dict]):
 
     all_rows = updated_rows + new_additions
 
+    # Read checkboxes from Дашборд (user might check there, not in Все данные)
+    dash_result = sheets.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID, range="Дашборд!A:C"
+    ).execute().get("values", [])
+    dash_done_map = {}
+    for row in dash_result[1:]:  # skip header
+        if len(row) >= 3:
+            key = (row[0].strip(), row[1].strip())
+            if str(row[2]).upper() == "TRUE":
+                dash_done_map[key] = True
+
+    # Merge: if checked in either Все данные or Дашборд → mark as done
+    for r in all_rows:
+        pad = r + [""] * (13 - len(r))
+        key = (pad[0].strip(), pad[3].strip())
+        if key in dash_done_map:
+            r[2] = "TRUE"
+
     # Separate done rows → "Завершённые" tab
     active_rows = []
     done_rows = []
