@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from db import init_db, get_unprocessed_messages, mark_processed, cleanup_old_messages
+from db import init_db, get_unprocessed_messages, get_all_messages, mark_processed, cleanup_old_messages
 from tg_reader import read_chats_today
 from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot, check_duplicates
 from gdocs import append_recap, remove_old_recaps, overwrite_status_doc, read_recap_doc
@@ -28,13 +28,15 @@ async def daily_recap_job():
         print(f"[main] Read {count} messages total")
 
         today = datetime.now(TZ).strftime("%Y-%m-%d")
-        messages = await get_unprocessed_messages(today)
+        new_messages = await get_unprocessed_messages(today)
 
-        if not messages:
-            print("[main] No messages to recap")
+        if not new_messages:
+            print("[main] No new messages to recap")
             return
 
-        recap_text = generate_daily_recap(messages)
+        # Text recap uses ALL messages for the day (full context)
+        all_messages = await get_all_messages(today)
+        recap_text = generate_daily_recap(all_messages)
         print(f"[main] Recap generated ({len(recap_text)} chars)")
 
         date_header = datetime.now(TZ).strftime("%d.%m.%Y")
@@ -55,9 +57,9 @@ async def daily_recap_job():
             append_recap(recap_doc_id, date_header, recap_text)
             remove_old_recaps(recap_doc_id, days=28)
 
-        # Sync structured data to Google Sheet
+        # Sync structured data to Google Sheet (only new messages)
         existing_topics = get_existing_topics()
-        structured = generate_structured_recap(messages, existing_topics=existing_topics)
+        structured = generate_structured_recap(new_messages, existing_topics=existing_topics)
         if structured:
             # Check new items for duplicates
             structured = check_duplicates(structured, existing_topics)

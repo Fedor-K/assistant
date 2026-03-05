@@ -62,6 +62,25 @@ async def get_unprocessed_messages(date: str) -> dict[str, list[str]]:
     return by_chat
 
 
+async def get_all_messages(date: str) -> dict[str, list[str]]:
+    """Returns ALL messages for the date (processed + unprocessed)."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT chat_title, sender_name, message_text, message_time "
+            "FROM messages WHERE date = ? ORDER BY chat_id, message_time",
+            (date,),
+        )
+        rows = await cursor.fetchall()
+
+    by_chat: dict[str, list[str]] = {}
+    for row in rows:
+        title = row["chat_title"] or "Unknown"
+        line = f"[{row['message_time']}] {row['sender_name']}: {row['message_text']}"
+        by_chat.setdefault(title, []).append(line)
+    return by_chat
+
+
 async def mark_processed(date: str):
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute(
