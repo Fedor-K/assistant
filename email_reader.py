@@ -54,8 +54,8 @@ def _get_text(msg) -> str:
     return ""
 
 
-def read_emails_today() -> list[dict]:
-    """Read today's emails. Returns list of {from, subject, date, body}."""
+def read_emails_today(days_back: int = 7) -> list[dict]:
+    """Read emails for the last N days. Returns list of {from, subject, date, body}."""
     address = os.getenv("EMAIL_ADDRESS", "")
     password = os.getenv("EMAIL_PASSWORD", "")
     server = os.getenv("EMAIL_IMAP_SERVER", "imap.yandex.ru")
@@ -64,8 +64,9 @@ def read_emails_today() -> list[dict]:
         print("[email] EMAIL_ADDRESS or EMAIL_PASSWORD not set")
         return []
 
-    today = datetime.now(TZ)
-    date_str = today.strftime("%d-%b-%Y")
+    from datetime import timedelta
+    since = datetime.now(TZ) - timedelta(days=days_back)
+    date_str = since.strftime("%d-%b-%Y")
 
     try:
         mail = imaplib.IMAP4_SSL(server)
