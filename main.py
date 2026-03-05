@@ -11,9 +11,9 @@ load_dotenv()
 
 from db import init_db, get_unprocessed_messages, mark_processed, cleanup_old_messages
 from tg_reader import read_chats_today
-from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot
+from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot, check_duplicates
 from gdocs import append_recap, remove_old_recaps, overwrite_status_doc, read_recap_doc
-from sheet_sync import sync_rows
+from sheet_sync import sync_rows, get_existing_topics
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Dubai"))
 
@@ -46,8 +46,11 @@ async def daily_recap_job():
             print(recap_text)
 
         # Sync structured data to Google Sheet
-        structured = generate_structured_recap(messages)
+        existing_topics = get_existing_topics()
+        structured = generate_structured_recap(messages, existing_topics=existing_topics)
         if structured:
+            # Check new items for duplicates
+            structured = check_duplicates(structured, existing_topics)
             sync_rows(structured)
             print(f"[main] Sheet synced ({len(structured)} topics)")
 

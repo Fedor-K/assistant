@@ -11,7 +11,7 @@ load_dotenv()
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Dubai"))
 SHEET_ID = os.getenv("SHEET_ID", "12WTHHM_0JXu1wJuLYM3M_-Sb3gZvJqxUSd51801Ulsc")
-HEADER = ["Контакт", "Роль", "Готово", "Тема", "Статус", "Суть", "Итог", "Следующий шаг", "Ответственный", "Создано", "Обновлено", "Контекст"]
+HEADER = ["Контакт", "Роль", "Готово", "Тема", "Статус", "Суть", "Итог", "Следующий шаг", "Ответственный", "Создано", "Обновлено", "Контекст", "ID"]
 
 
 def _get_sheets():
@@ -24,36 +24,86 @@ def _get_sheets():
 
 def _read_existing(sheets) -> list[list[str]]:
     result = sheets.spreadsheets().values().get(
-        spreadsheetId=SHEET_ID, range="Все данные!A:L"
+        spreadsheetId=SHEET_ID, range="Все данные!A:M"
     ).execute()
     rows = result.get("values", [])
     return rows[1:] if rows else []  # skip header
 
 
+def _next_id(existing: list[list[str]]) -> int:
+    """Find max ID in existing rows and return next one."""
+    max_id = 0
+    for row in existing:
+        pad = row + [""] * (13 - len(row))
+        try:
+            rid = int(pad[12])
+            if rid > max_id:
+                max_id = rid
+        except (ValueError, IndexError):
+            pass
+    return max_id + 1
+
+
+def _ensure_ids(rows: list[list[str]]) -> list[list[str]]:
+    """Assign IDs to rows that don't have one (migration)."""
+    next_id = _next_id(rows)
+    result = []
+    for row in rows:
+        pad = row + [""] * (13 - len(row))
+        if not pad[12]:
+            pad[12] = str(next_id)
+            next_id += 1
+        result.append(pad[:13])
+    return result
+
+
+def get_existing_topics() -> list[dict]:
+    """Read existing topics from sheet for prompt building."""
+    sheets = _get_sheets()
+    existing = _read_existing(sheets)
+    topics = []
+    for row in existing:
+        pad = row + [""] * (13 - len(row))
+        topic_id = pad[12]
+        contact = pad[0]
+        topic = pad[3]
+        if contact and topic:
+            topics.append({
+                "id": int(topic_id) if topic_id else None,
+                "contact": contact,
+                "topic": topic,
+            })
+    return topics
+
+
 def sync_rows(new_rows: list[dict]):
     """
-    new_rows: list of dicts with keys matching HEADER (without dates).
-    Compares by (contact, topic). Updates existing, adds new.
+    new_rows: list of dicts with "id" (int or "new"), contact, topic, etc.
+    Matches by ID. Updates existing, adds new with auto-incremented IDs.
     """
     sheets = _get_sheets()
     today = datetime.now(TZ).strftime("%d.%m.%Y")
 
     existing = _read_existing(sheets)
+    # Migrate: assign IDs to old rows that don't have them
+    existing = _ensure_ids(existing)
 
-    # Index existing by (contact, topic)
-    # Sheet layout: 0=Контакт, 1=Роль, 2=Готово, 3=Тема, 4=Статус, 5=Суть, 6=Итог, 7=Следующий шаг, 8=Ответственный, 9=Создано, 10=Обновлено, 11=Контекст
-    existing_map = {}
+    # Sheet layout: 0=Контакт, 1=Роль, 2=Готово, 3=Тема, 4=Статус, 5=Суть, 6=Итог, 7=Следующий шаг, 8=Ответственный, 9=Создано, 10=Обновлено, 11=Контекст, 12=ID
+    existing_by_id = {}
     for i, row in enumerate(existing):
-        if len(row) >= 4:
-            key = (row[0].strip(), row[3].strip())
-            existing_map[key] = (i, row)
+        pad = row + [""] * (13 - len(row))
+        try:
+            row_id = int(pad[12])
+            existing_by_id[row_id] = (i, pad)
+        except (ValueError, IndexError):
+            pass
 
+    next_id = _next_id(existing)
     updated_rows = list(existing)
     new_additions = []
 
     for nr in new_rows:
-        key = (nr["contact"].strip(), nr["topic"].strip())
-        # Data fields (without Готово, dates, context)
+        row_id = nr.get("id")
         data_fields = [
             nr.get("contact", ""),
             nr.get("role", ""),
@@ -66,36 +116,33 @@ def sync_rows(new_rows: list[dict]):
         ]
 
         context = nr.get("context", "")
+        if isinstance(context, list):
+            context = "\n".join(str(c) for c in context)
 
-        if key in existing_map:
-            idx, old_row = existing_map[key]
-            pad = old_row + [""] * (12 - len(old_row))
+        if isinstance(row_id, int) and row_id in existing_by_id:
+            # Update existing row by ID
+            idx, pad = existing_by_id[row_id]
             created = pad[9] or today
             done = pad[2] or "FALSE"
             old_context = pad[11]
 
-            # Append new context to existing (keep history)
             if context and context not in old_context:
                 combined_context = f"{old_context}\n---\n{context}" if old_context else context
             else:
                 combined_context = old_context
 
-            # Extract old data fields (skip Готово at index 2)
-            old_data = [pad[0], pad[1], pad[3], pad[4], pad[5], pad[6], pad[7], pad[8]]
-            if data_fields != old_data:
-                updated_rows[idx] = [data_fields[0], data_fields[1], done] + data_fields[2:] + [created, today, combined_context]
-            elif context and context not in old_context:
-                updated_rows[idx] = [pad[0], pad[1], done, pad[3], pad[4], pad[5], pad[6], pad[7], pad[8], created, today, combined_context]
-            # else: no change, keep as is
+            updated_rows[idx] = [data_fields[0], data_fields[1], done] + data_fields[2:] + [created, today, combined_context, str(row_id)]
         else:
-            new_additions.append([data_fields[0], data_fields[1], "FALSE"] + data_fields[2:] + [today, today, context])
+            # New row — assign next ID
+            new_additions.append([data_fields[0], data_fields[1], "FALSE"] + data_fields[2:] + [today, today, context, str(next_id)])
+            next_id += 1
 
     all_rows = updated_rows + new_additions
     values = [HEADER] + all_rows
 
     # Clear and rewrite
     sheets.spreadsheets().values().clear(
-        spreadsheetId=SHEET_ID, range="Все данные!A:L"
+        spreadsheetId=SHEET_ID, range="Все данные!A:M"
     ).execute()
     sheets.spreadsheets().values().update(
         spreadsheetId=SHEET_ID, range="Все данные!A1", valueInputOption="RAW",
