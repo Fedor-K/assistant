@@ -264,6 +264,52 @@ def check_duplicates(items: list[dict], existing_topics: list[dict]) -> list[dic
     return items
 
 
+DONE_REPORT_PROMPT = """На основе списка завершённых задач составь отчёт о проделанной работе.
+
+Формат — деловой отчёт, как для акта выполненных работ. Без эмодзи.
+
+Структура:
+1. ВЫПОЛНЕННЫЕ ЗАДАЧИ — сгруппируй по направлениям/темам, укажи что сделано, кем и когда
+2. КЛЮЧЕВЫЕ РЕЗУЛЬТАТЫ — главные достижения за период
+3. СТАТИСТИКА — количество завершённых задач, по каким направлениям
+
+Правила:
+- Только факты и конкретика
+- Группируй по направлениям работы, не по контактам
+- Указывай ответственных и даты
+
+Завершённые задачи:
+{tasks}"""
+
+
+def generate_done_report(tasks: list[dict]) -> str:
+    """Generate work report from completed tasks."""
+    if not tasks:
+        return "Нет завершённых задач."
+
+    tasks_text = ""
+    for t in tasks:
+        tasks_text += (
+            f"- Тема: {t['topic']}\n"
+            f"  Контакт: {t['contact']} ({t['role']})\n"
+            f"  Суть: {t['summary']}\n"
+            f"  Итог: {t['result']}\n"
+            f"  Ответственный: {t['responsible']}\n"
+            f"  Создано: {t['created']} | Завершено: {t['done_date']}\n\n"
+        )
+
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        system=SYSTEM_PROMPT,
+        messages=[
+            {"role": "user", "content": DONE_REPORT_PROMPT.format(tasks=tasks_text)}
+        ],
+    )
+    return response.content[0].text
+
+
 def generate_status_snapshot(recaps_text: str) -> str:
     if not recaps_text.strip():
         return "Недостаточно данных для статус-снапшота."

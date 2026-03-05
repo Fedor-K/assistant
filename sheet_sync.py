@@ -22,6 +22,39 @@ def _get_sheets():
     return build("sheets", "v4", credentials=creds)
 
 
+def get_done_tasks() -> list[dict]:
+    """Read completed tasks from Завершённые tab."""
+    sheets = _get_sheets()
+    try:
+        result = sheets.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range="Завершённые!A:L"
+        ).execute()
+    except Exception:
+        return []
+    rows = result.get("values", [])
+    if len(rows) <= 1:
+        return []
+    # Header: Контакт, Роль, Тема, Статус, Суть, Итог, Следующий шаг, Ответственный, Создано, Обновлено, Завершено, ID
+    tasks = []
+    for row in rows[1:]:
+        pad = row + [""] * (12 - len(row))
+        tasks.append({
+            "contact": pad[0],
+            "role": pad[1],
+            "topic": pad[2],
+            "status": pad[3],
+            "summary": pad[4],
+            "result": pad[5],
+            "next_step": pad[6],
+            "responsible": pad[7],
+            "created": pad[8],
+            "updated": pad[9],
+            "done_date": pad[10],
+            "id": pad[11],
+        })
+    return tasks
+
+
 def _read_existing(sheets) -> list[list[str]]:
     result = sheets.spreadsheets().values().get(
         spreadsheetId=SHEET_ID, range="Все данные!A:M"

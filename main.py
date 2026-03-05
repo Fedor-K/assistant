@@ -11,9 +11,9 @@ load_dotenv()
 
 from db import init_db, get_unprocessed_messages, get_all_messages, mark_processed, cleanup_old_messages
 from tg_reader import read_chats_today
-from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot, check_duplicates
+from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot, generate_done_report, check_duplicates
 from gdocs import append_recap, remove_old_recaps, overwrite_status_doc, read_recap_doc
-from sheet_sync import sync_rows, get_existing_topics
+from sheet_sync import sync_rows, get_existing_topics, get_done_tasks
 from docx_export import save_recap_docx
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Dubai"))
@@ -34,28 +34,22 @@ async def daily_recap_job():
             print("[main] No new messages to recap")
             return
 
-        # Text recap uses ALL messages for the day (full context)
-        all_messages = await get_all_messages(today)
-        recap_text = generate_daily_recap(all_messages)
-        print(f"[main] Recap generated ({len(recap_text)} chars)")
-
         date_header = datetime.now(TZ).strftime("%d.%m.%Y")
 
-        # Save DOCX
-        docx_path = save_recap_docx(recap_text, date_header)
-        print(f"[main] DOCX saved: {docx_path}")
+        # Generate work report from completed tasks
+        done_tasks = get_done_tasks()
+        if done_tasks:
+            report_text = generate_done_report(done_tasks)
+            print(f"[main] Done report generated ({len(report_text)} chars)")
 
-        # Write recap to Status Snapshot doc (connected to Claude Project)
-        status_doc_id = os.getenv("STATUS_DOC_ID", "")
-        if status_doc_id:
-            append_recap(status_doc_id, date_header, recap_text)
-            remove_old_recaps(status_doc_id, days=28)
+            docx_path = save_recap_docx(report_text, date_header)
+            print(f"[main] DOCX saved: {docx_path}")
 
-        # Also write to Daily Recaps doc if set
-        recap_doc_id = os.getenv("RECAP_DOC_ID", "")
-        if recap_doc_id:
-            append_recap(recap_doc_id, date_header, recap_text)
-            remove_old_recaps(recap_doc_id, days=28)
+            status_doc_id = os.getenv("STATUS_DOC_ID", "")
+            if status_doc_id:
+                overwrite_status_doc(status_doc_id, report_text)
+        else:
+            print("[main] No completed tasks for report")
 
         # Sync structured data to Google Sheet (only new messages)
         existing_topics = get_existing_topics()
