@@ -7,3 +7,8 @@ __pycache__/
 sa.json
 service-account*.json
 recaps/
+bot.log
+recap_rows_cache.json
+vitaly_history.txt
+vitaly_recap.txt
+test_*.py
