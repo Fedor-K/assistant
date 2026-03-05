@@ -43,13 +43,17 @@ async def daily_recap_job():
         docx_path = save_recap_docx(recap_text, date_header)
         print(f"[main] DOCX saved: {docx_path}")
 
-        doc_id = os.getenv("RECAP_DOC_ID", "")
-        if doc_id:
-            append_recap(doc_id, date_header, recap_text)
-            remove_old_recaps(doc_id, days=28)
-        else:
-            print("[main] RECAP_DOC_ID not set, printing recap:")
-            print(recap_text)
+        # Write recap to Status Snapshot doc (connected to Claude Project)
+        status_doc_id = os.getenv("STATUS_DOC_ID", "")
+        if status_doc_id:
+            append_recap(status_doc_id, date_header, recap_text)
+            remove_old_recaps(status_doc_id, days=28)
+
+        # Also write to Daily Recaps doc if set
+        recap_doc_id = os.getenv("RECAP_DOC_ID", "")
+        if recap_doc_id:
+            append_recap(recap_doc_id, date_header, recap_text)
+            remove_old_recaps(recap_doc_id, days=28)
 
         # Sync structured data to Google Sheet
         existing_topics = get_existing_topics()
