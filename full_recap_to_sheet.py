@@ -92,7 +92,9 @@ def generate_structured_recap(chat_title: str, messages: list[str]) -> list[list
   "summary": "суть обсуждения (1-2 предложения)",
   "result": "к чему пришли",
   "next_step": "что нужно сделать",
-  "responsible": "кто отвечает"
+  "responsible": "кто отвечает",
+  "first_date": "дата первого сообщения по этой теме в формате DD.MM.YYYY",
+  "last_date": "дата последнего сообщения по этой теме в формате DD.MM.YYYY"
 }}
 
 Если переписка формальная — верни 1 элемент с topic "Общение" и кратким summary.
@@ -103,7 +105,7 @@ def generate_structured_recap(chat_title: str, messages: list[str]) -> list[list
 
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=4096,
+        max_tokens=8192,
         system=SYSTEM,
         messages=[{"role": "user", "content": PROMPT}],
     )
@@ -134,68 +136,148 @@ def generate_structured_recap(chat_title: str, messages: list[str]) -> list[list
             item.get("result", ""),
             item.get("next_step", ""),
             item.get("responsible", ""),
+            item.get("first_date", ""),
+            item.get("last_date", ""),
         ])
     return rows
 
 
-def create_sheet_and_write(all_rows: list[list[str]]) -> str:
+def write_to_existing_sheet(all_rows: list[list[str]]):
     creds = service_account.Credentials.from_service_account_file(
-        "sa.json", scopes=[
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
+        "sa.json", scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     sheets = build("sheets", "v4", credentials=creds)
-    drive = build("drive", "v3", credentials=creds)
-
+    sheet_id = os.getenv("SHEET_ID", "12WTHHM_0JXu1wJuLYM3M_-Sb3gZvJqxUSd51801Ulsc")
     today = datetime.now(TZ).strftime("%d.%m.%Y")
 
-    # Create spreadsheet
-    spreadsheet = sheets.spreadsheets().create(body={
-        "properties": {"title": f"The Act — Рекап переписок ({today})"},
-        "sheets": [{"properties": {"title": "Рекап"}}],
-    }).execute()
-    sheet_id = spreadsheet["spreadsheetId"]
-    print(f"Created sheet: {sheet_id}")
+    header = ["Контакт", "Роль", "Готово", "Тема", "Статус", "Суть", "Итог", "Следующий шаг", "Ответственный", "Создано", "Обновлено"]
 
-    # Share with user
-    drive.permissions().create(
-        fileId=sheet_id,
-        body={"type": "anyone", "role": "writer"},
-    ).execute()
+    final_rows = []
+    for r in all_rows:
+        # r[0:8] = contact, role, topic, status, summary, result, next_step, responsible, r[8] = first_date, r[9] = last_date
+        padded = r + [""] * (10 - len(r)) if len(r) < 10 else r[:10]
+        first_date = padded[8] or today
+        last_date = padded[9] or today
+        # Insert Готово at index 2 (after Роль)
+        final_rows.append([padded[0], padded[1], "FALSE", padded[2], padded[3], padded[4], padded[5], padded[6], padded[7], first_date, last_date])
 
-    # Header
-    header = ["Контакт", "Роль", "Тема", "Статус", "Суть", "Итог", "Следующий шаг", "Ответственный"]
-    values = [header] + all_rows
+    values = [header] + final_rows
 
+    # Clear ALL tabs
+    for tab in ["Все данные", "Дашборд", "По контактам"]:
+        sheets.spreadsheets().values().clear(spreadsheetId=sheet_id, range=f"{tab}!A:Z").execute()
+
+    # Write Все данные
     sheets.spreadsheets().values().update(
-        spreadsheetId=sheet_id,
-        range="Рекап!A1",
-        valueInputOption="RAW",
+        spreadsheetId=sheet_id, range="Все данные!A1", valueInputOption="RAW",
         body={"values": values},
     ).execute()
 
-    # Format header (bold, freeze)
-    sheet_props_id = spreadsheet["sheets"][0]["properties"]["sheetId"]
-    sheets.spreadsheets().batchUpdate(spreadsheetId=sheet_id, body={"requests": [
-        {"repeatCell": {
-            "range": {"sheetId": sheet_props_id, "startRowIndex": 0, "endRowIndex": 1},
-            "cell": {"userEnteredFormat": {"textFormat": {"bold": True},
-                     "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9}}},
-            "fields": "userEnteredFormat(textFormat,backgroundColor)",
-        }},
-        {"updateSheetProperties": {
-            "properties": {"sheetId": sheet_props_id, "gridProperties": {"frozenRowCount": 1}},
-            "fields": "gridProperties.frozenRowCount",
-        }},
-        {"autoResizeDimensions": {
-            "dimensions": {"sheetId": sheet_props_id, "dimension": "COLUMNS",
-                          "startIndex": 0, "endIndex": 8},
-        }},
-    ]}).execute()
+    # Дашборд — layout: Контакт, Тема, Готово, Статус, Что нужно сделать, Ответственный, Создано, Обновлено
+    # final_rows layout: 0=Контакт, 1=Роль, 2=Готово, 3=Тема, 4=Статус, 5=Суть, 6=Итог, 7=Следующий шаг, 8=Ответственный, 9=Создано, 10=Обновлено
+    dash_header = ["Контакт", "Тема", "Готово", "Статус", "Что нужно сделать", "Ответственный", "Создано", "Обновлено"]
+    dash_rows = []
+    for r in final_rows:
+        if r[4] in ("В процессе", "Открыто") or r[7].strip():
+            dash_rows.append([r[0], r[3], r[2], r[4],
+                            r[7] if r[7].strip() else r[5],
+                            r[8], r[9], r[10]])
+    dash_rows.sort(key=lambda x: 0 if x[3] == "Открыто" else (1 if x[3] == "В процессе" else 2))
 
-    print(f"Written {len(all_rows)} rows")
-    return sheet_id
+    sheets.spreadsheets().values().update(
+        spreadsheetId=sheet_id, range="Дашборд!A1", valueInputOption="RAW",
+        body={"values": [dash_header] + dash_rows},
+    ).execute()
+
+    # По контактам
+    # final_rows layout: 0=Контакт, 1=Роль, 2=Готово, 3=Тема, 4=Статус, 5=Суть, 6=Итог, 9=Создано, 10=Обновлено
+    ct_header = ["Контакт", "Роль", "Тема", "Статус", "Суть", "Итог", "Создано", "Обновлено"]
+    sorted_rows = sorted(final_rows, key=lambda r: r[0])
+    ct_rows = []
+    current = None
+    for r in sorted_rows:
+        if r[0] != current:
+            if current is not None:
+                ct_rows.append([""] * 8)
+            current = r[0]
+        ct_rows.append([r[0], r[1], r[3], r[4], r[5], r[6], r[9], r[10]])
+
+    sheets.spreadsheets().values().update(
+        spreadsheetId=sheet_id, range="По контактам!A1", valueInputOption="RAW",
+        body={"values": [ct_header] + ct_rows},
+    ).execute()
+
+    # Formatting
+    sp = sheets.spreadsheets().get(spreadsheetId=sheet_id).execute()
+    sid = {s["properties"]["title"]: s["properties"]["sheetId"] for s in sp["sheets"]}
+
+    # Remove old conditional formats
+    fmt_del = []
+    for s in sp["sheets"]:
+        for _ in s.get("conditionalFormats", []):
+            fmt_del.append({"deleteConditionalFormatRule": {"sheetId": s["properties"]["sheetId"], "index": 0}})
+    if fmt_del:
+        sheets.spreadsheets().batchUpdate(spreadsheetId=sheet_id, body={"requests": fmt_del}).execute()
+
+    dash_rows_count = len(dash_rows) + 1
+    all_rows_count = len(final_rows) + 1
+
+    fmt = [
+        # Bold headers + freeze (Все данные now has 11 cols with Готово at C)
+        *[item for tab, ncols in [("Дашборд", 8), ("Все данные", 11), ("По контактам", 8)] for item in [
+            {"repeatCell": {
+                "range": {"sheetId": sid[tab], "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": ncols},
+                "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85}}},
+                "fields": "userEnteredFormat(textFormat,backgroundColor)",
+            }},
+            {"updateSheetProperties": {
+                "properties": {"sheetId": sid[tab], "gridProperties": {"frozenRowCount": 1}},
+                "fields": "gridProperties.frozenRowCount",
+            }},
+        ]],
+        # Дашборд checkboxes col C (2)
+        {"setDataValidation": {
+            "range": {"sheetId": sid["Дашборд"], "startRowIndex": 1, "endRowIndex": dash_rows_count, "startColumnIndex": 2, "endColumnIndex": 3},
+            "rule": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
+        }},
+        # Все данные checkboxes col C (2)
+        {"setDataValidation": {
+            "range": {"sheetId": sid["Все данные"], "startRowIndex": 1, "endRowIndex": all_rows_count, "startColumnIndex": 2, "endColumnIndex": 3},
+            "rule": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}
+        }},
+        # Дашборд strikethrough on C
+        {"addConditionalFormatRule": {"rule": {
+            "ranges": [{"sheetId": sid["Дашборд"], "startRowIndex": 1, "endRowIndex": dash_rows_count, "startColumnIndex": 0, "endColumnIndex": 8}],
+            "booleanRule": {
+                "condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": "=$C2=TRUE"}]},
+                "format": {"textFormat": {"strikethrough": True, "foregroundColor": {"red": 0.6, "green": 0.6, "blue": 0.6}}}
+            }
+        }, "index": 0}},
+        # Все данные strikethrough on C
+        {"addConditionalFormatRule": {"rule": {
+            "ranges": [{"sheetId": sid["Все данные"], "startRowIndex": 1, "endRowIndex": all_rows_count, "startColumnIndex": 0, "endColumnIndex": 11}],
+            "booleanRule": {
+                "condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": "=$C2=TRUE"}]},
+                "format": {"textFormat": {"strikethrough": True, "foregroundColor": {"red": 0.6, "green": 0.6, "blue": 0.6}}}
+            }
+        }, "index": 0}},
+        # Status colors Дашборд col D (3) — Статус
+        {"addConditionalFormatRule": {"rule": {
+            "ranges": [{"sheetId": sid["Дашборд"], "startRowIndex": 1, "startColumnIndex": 3, "endColumnIndex": 4}],
+            "booleanRule": {"condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": "Открыто"}]}, "format": {"backgroundColor": {"red": 1, "green": 0.8, "blue": 0.8}}}
+        }, "index": 1}},
+        {"addConditionalFormatRule": {"rule": {
+            "ranges": [{"sheetId": sid["Дашборд"], "startRowIndex": 1, "startColumnIndex": 3, "endColumnIndex": 4}],
+            "booleanRule": {"condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": "В процессе"}]}, "format": {"backgroundColor": {"red": 1, "green": 0.95, "blue": 0.7}}}
+        }, "index": 2}},
+        {"addConditionalFormatRule": {"rule": {
+            "ranges": [{"sheetId": sid["Дашборд"], "startRowIndex": 1, "startColumnIndex": 3, "endColumnIndex": 4}],
+            "booleanRule": {"condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": "Решено"}]}, "format": {"backgroundColor": {"red": 0.8, "green": 1, "blue": 0.8}}}
+        }, "index": 3}},
+    ]
+
+    sheets.spreadsheets().batchUpdate(spreadsheetId=sheet_id, body={"requests": fmt}).execute()
+    print(f"Written {len(final_rows)} rows with formatting")
 
 
 async def main():
@@ -224,8 +306,7 @@ async def main():
         print(f"Cached {len(all_rows)} rows to {cache_file}")
 
     print(f"\n=== Writing to Google Sheet ({len(all_rows)} rows) ===\n")
-    sheet_id = create_sheet_and_write(all_rows)
-    print(f"\nhttps://docs.google.com/spreadsheets/d/{sheet_id}/edit")
+    write_to_existing_sheet(all_rows)
 
 
 asyncio.run(main())
