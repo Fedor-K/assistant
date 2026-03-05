@@ -6,3 +6,4 @@ __pycache__/
 *.db
 sa.json
 service-account*.json
+recaps/

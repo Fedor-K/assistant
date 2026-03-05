@@ -14,6 +14,7 @@ from tg_reader import read_chats_today
 from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot, check_duplicates
 from gdocs import append_recap, remove_old_recaps, overwrite_status_doc, read_recap_doc
 from sheet_sync import sync_rows, get_existing_topics
+from docx_export import save_recap_docx
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Dubai"))
 
@@ -37,6 +38,11 @@ async def daily_recap_job():
         print(f"[main] Recap generated ({len(recap_text)} chars)")
 
         date_header = datetime.now(TZ).strftime("%d.%m.%Y")
+
+        # Save DOCX
+        docx_path = save_recap_docx(recap_text, date_header)
+        print(f"[main] DOCX saved: {docx_path}")
+
         doc_id = os.getenv("RECAP_DOC_ID", "")
         if doc_id:
             append_recap(doc_id, date_header, recap_text)
