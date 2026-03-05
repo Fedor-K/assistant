@@ -296,38 +296,23 @@ def _apply_checkbox_formatting(sheets, all_data_done: list[bool], dash_done: lis
 
 
 def _rebuild_dashboard(sheets, all_rows) -> list[bool]:
-    """Rebuild dashboard. Returns list of done booleans for checkbox formatting."""
-    # Read existing dashboard to preserve checkbox state
-    # Dashboard layout: Контакт(A), Тема(B), Готово(C), Статус(D), Что нужно сделать(E), Ответственный(F), Создано(G), Обновлено(H)
-    existing_dash = sheets.spreadsheets().values().get(
-        spreadsheetId=SHEET_ID, range="Дашборд!A:H"
-    ).execute().get("values", [])
-
-    # Map existing dashboard checkboxes by (contact, topic) — Готово is col C (index 2)
-    done_map = {}
-    for row in existing_dash[1:]:  # skip header
-        if len(row) >= 2:
-            key = (row[0].strip(), row[1].strip())
-            done_map[key] = row[2] if len(row) > 2 else "FALSE"
-
+    """Rebuild dashboard from active rows only. Returns list of done booleans."""
     header = ["Контакт", "Тема", "Готово", "Статус", "Что нужно сделать", "Ответственный", "Создано", "Обновлено"]
     rows = []
-    # all_rows layout: 0=Контакт, 1=Роль, 2=Готово, 3=Тема, 4=Статус, 5=Суть, 6=Итог, 7=Следующий шаг, 8=Ответственный, 9=Создано, 10=Обновлено
+    # all_rows = active only (done already moved to Завершённые)
+    # layout: 0=Контакт, 1=Роль, 2=Готово, 3=Тема, 4=Статус, 5=Суть, 6=Итог, 7=Следующий шаг, 8=Ответственный, 9=Создано, 10=Обновлено
     for r in all_rows:
         r_padded = r + [""] * (12 - len(r))
         status = r_padded[4]
         if status in ("В процессе", "Открыто") or r_padded[7].strip():
-            key = (r_padded[0].strip(), r_padded[3].strip())
-            done = done_map.get(key, r_padded[2] or "FALSE")
-            rows.append([r_padded[0], r_padded[3], done, r_padded[4],
+            rows.append([r_padded[0], r_padded[3], "FALSE", r_padded[4],
                         r_padded[7] if r_padded[7].strip() else r_padded[5],
                         r_padded[8], r_padded[9], r_padded[10]])
 
-    # Sort: unchecked first, then by status
+    # Sort by status
     def sort_key(x):
-        is_done = 1 if x[2] == "TRUE" else 0
         status_order = 0 if x[3] == "Открыто" else (1 if x[3] == "В процессе" else 2)
-        return (is_done, status_order)
+        return status_order
     rows.sort(key=sort_key)
 
     sheets.spreadsheets().values().clear(spreadsheetId=SHEET_ID, range="Дашборд!A:Z").execute()
