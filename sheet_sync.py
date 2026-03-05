@@ -254,7 +254,7 @@ def _move_to_done(sheets, done_rows: list[list[str]]):
         if row_id in existing_ids:
             continue  # already in done tab
         # Format: contact, role, topic, status, summary, result, next_step, responsible, created, updated, done_date, id
-        new_done.append([pad[0], pad[1], pad[3], pad[4], pad[5], pad[6], pad[7], pad[8], pad[9], pad[10], today, pad[12]])
+        new_done.append([pad[0], pad[1], pad[3], "Решено", pad[5], pad[6], pad[7], pad[8], pad[9], pad[10], today, pad[12]])
 
     if not existing_done:
         # Write header + rows
