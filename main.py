@@ -190,4 +190,8 @@ async def main():
 
 
 if __name__ == "__main__":
+    import sys
+    # Unbuffered output for launchd logging
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
     asyncio.run(main())
