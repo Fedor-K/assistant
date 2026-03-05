@@ -1,0 +1,8 @@
+.env
+*.session
+*.session-journal
+__pycache__/
+*.pyc
+*.db
+sa.json
+service-account*.json
