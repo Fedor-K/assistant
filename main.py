@@ -14,7 +14,7 @@ from tg_reader import read_chats_today
 from recap import generate_daily_recap, generate_structured_recap, generate_status_snapshot, generate_done_report, check_duplicates
 from gdocs import append_recap, remove_old_recaps, overwrite_status_doc, read_recap_doc
 from sheet_sync import sync_rows, get_existing_topics, get_done_tasks
-from email_reader import read_emails_today, format_emails_for_recap
+from email_reader import read_emails, format_emails_for_recap
 from docx_export import save_recap_docx
 
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Asia/Dubai"))
@@ -52,8 +52,8 @@ async def daily_recap_job():
         else:
             print("[main] No completed tasks for report")
 
-        # Read emails and merge with TG messages
-        emails = read_emails_today()
+        # Read today's emails and merge with TG messages
+        emails = read_emails(days_back=1)
         email_text = format_emails_for_recap(emails)
 
         # Merge: add email text as a virtual "chat"
@@ -133,9 +133,22 @@ async def main():
         elif sys.argv[1] == "both":
             await sunday_combined_job()
             return
+        elif sys.argv[1] == "email-all":
+            # One-time: read ALL email history and sync to sheet
+            print("[main] Reading all email history...")
+            emails = read_emails(days_back=365)
+            email_text = format_emails_for_recap(emails)
+            if email_text:
+                existing_topics = get_existing_topics()
+                structured = generate_structured_recap({"Почта (Email)": [email_text]}, existing_topics=existing_topics)
+                if structured:
+                    structured = check_duplicates(structured, existing_topics)
+                    sync_rows(structured)
+                    print(f"[main] Email sync done ({len(structured)} topics)")
+            return
         else:
             print(f"Unknown command: {sys.argv[1]}")
-            print("Usage: python main.py [recap|status|both]")
+            print("Usage: python main.py [recap|status|both|email-all]")
             return
 
     recap_hour = int(os.getenv("RECAP_HOUR", "19"))

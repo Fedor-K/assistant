@@ -54,7 +54,7 @@ def _get_text(msg) -> str:
     return ""
 
 
-def read_emails_today(days_back: int = 7) -> list[dict]:
+def read_emails(days_back: int = 1) -> list[dict]:
     """Read emails for the last N days. Returns list of {from, subject, date, body}."""
     address = os.getenv("EMAIL_ADDRESS", "")
     password = os.getenv("EMAIL_PASSWORD", "")
