@@ -58,7 +58,7 @@ def _ensure_ids(rows: list[list[str]]) -> list[list[str]]:
 
 
 def get_existing_topics() -> list[dict]:
-    """Read existing topics from sheet for prompt building."""
+    """Read existing topics from sheet for prompt building (active + done)."""
     sheets = _get_sheets()
     existing = _read_existing(sheets)
     topics = []
@@ -73,6 +73,27 @@ def get_existing_topics() -> list[dict]:
                 "contact": contact,
                 "topic": topic,
             })
+
+    # Also read completed topics so Claude doesn't recreate them
+    try:
+        result = sheets.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID, range="Завершённые!A:L"
+        ).execute()
+        done_rows = result.get("values", [])[1:]  # skip header
+        for row in done_rows:
+            pad = row + [""] * (12 - len(row))
+            topic_id = pad[11]
+            contact = pad[0]
+            topic = pad[2]  # done tab: col C = Тема
+            if contact and topic and topic_id:
+                topics.append({
+                    "id": int(topic_id),
+                    "contact": contact,
+                    "topic": topic,
+                })
+    except Exception:
+        pass  # tab might not exist yet
+
     return topics
 
 
@@ -138,9 +159,20 @@ def sync_rows(new_rows: list[dict]):
             next_id += 1
 
     all_rows = updated_rows + new_additions
-    values = [HEADER] + all_rows
 
-    # Clear and rewrite
+    # Separate done rows → "Завершённые" tab
+    active_rows = []
+    done_rows = []
+    for r in all_rows:
+        pad = r + [""] * (13 - len(r))
+        if str(pad[2]).upper() == "TRUE":
+            done_rows.append(pad)
+        else:
+            active_rows.append(pad)
+
+    values = [HEADER] + active_rows
+
+    # Clear and rewrite active data
     sheets.spreadsheets().values().clear(
         spreadsheetId=SHEET_ID, range="Все данные!A:M"
     ).execute()
@@ -149,15 +181,104 @@ def sync_rows(new_rows: list[dict]):
         body={"values": values},
     ).execute()
 
-    # Rebuild dashboard
-    _rebuild_dashboard(sheets, all_rows)
-    _rebuild_by_contact(sheets, all_rows)
+    # Move done rows to "Завершённые"
+    _move_to_done(sheets, done_rows)
 
-    print(f"[sheet_sync] Updated: {len(existing)} existing, +{len(new_additions)} new")
+    # Rebuild dashboard (only active rows)
+    dash_done = _rebuild_dashboard(sheets, active_rows)
+    _rebuild_by_contact(sheets, active_rows)
+
+    # Apply real checkboxes
+    all_data_done = [False] * len(active_rows)  # all active = unchecked
+    _apply_checkbox_formatting(sheets, all_data_done, dash_done)
+
+    print(f"[sheet_sync] Updated: {len(existing)} existing, +{len(new_additions)} new, {len(done_rows)} done")
 
 
-def _rebuild_dashboard(sheets, all_rows):
-    """Rebuild dashboard. Reads existing checkboxes from dashboard first to preserve them."""
+def _ensure_tab_exists(sheets, tab_name: str):
+    """Create tab if it doesn't exist."""
+    sp = sheets.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
+    existing_tabs = [s["properties"]["title"] for s in sp["sheets"]]
+    if tab_name not in existing_tabs:
+        sheets.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={
+            "requests": [{"addSheet": {"properties": {"title": tab_name}}}]
+        }).execute()
+
+
+DONE_HEADER = ["Контакт", "Роль", "Тема", "Статус", "Суть", "Итог", "Следующий шаг", "Ответственный", "Создано", "Обновлено", "Завершено", "ID"]
+
+
+def _move_to_done(sheets, done_rows: list[list[str]]):
+    """Append done rows to 'Завершённые' tab (no duplicates by ID)."""
+    if not done_rows:
+        return
+
+    _ensure_tab_exists(sheets, "Завершённые")
+
+    # Read existing done rows to avoid duplicates
+    result = sheets.spreadsheets().values().get(
+        spreadsheetId=SHEET_ID, range="Завершённые!A:L"
+    ).execute()
+    existing_done = result.get("values", [])
+
+    # Collect existing IDs
+    existing_ids = set()
+    for row in existing_done[1:] if existing_done else []:
+        pad = row + [""] * (12 - len(row))
+        if pad[11]:
+            existing_ids.add(pad[11])
+
+    today = datetime.now(TZ).strftime("%d.%m.%Y")
+    new_done = []
+    for r in done_rows:
+        pad = r + [""] * (13 - len(r))
+        row_id = pad[12]
+        if row_id in existing_ids:
+            continue  # already in done tab
+        # Format: contact, role, topic, status, summary, result, next_step, responsible, created, updated, done_date, id
+        new_done.append([pad[0], pad[1], pad[3], pad[4], pad[5], pad[6], pad[7], pad[8], pad[9], pad[10], today, pad[12]])
+
+    if not existing_done:
+        # Write header + rows
+        sheets.spreadsheets().values().update(
+            spreadsheetId=SHEET_ID, range="Завершённые!A1", valueInputOption="RAW",
+            body={"values": [DONE_HEADER] + new_done},
+        ).execute()
+    elif new_done:
+        # Append rows
+        sheets.spreadsheets().values().append(
+            spreadsheetId=SHEET_ID, range="Завершённые!A1", valueInputOption="RAW",
+            body={"values": new_done},
+        ).execute()
+
+
+def _apply_checkbox_formatting(sheets, all_data_done: list[bool], dash_done: list[bool]):
+    """Apply real checkboxes to Готово column (C) in both tabs with correct True/False values."""
+    sp = sheets.spreadsheets().get(spreadsheetId=SHEET_ID).execute()
+    sid = {s["properties"]["title"]: s["properties"]["sheetId"] for s in sp["sheets"]}
+
+    requests = []
+    for tab, done_values in [("Все данные", all_data_done), ("Дашборд", dash_done)]:
+        sheet_id = sid[tab]
+        # Write each cell as boolean checkbox
+        rows_data = []
+        for val in done_values:
+            rows_data.append({"values": [{"userEnteredValue": {"boolValue": val},
+                                          "dataValidation": {"condition": {"type": "BOOLEAN"}, "showCustomUi": True}}]})
+        if rows_data:
+            requests.append({"updateCells": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 1, "endRowIndex": len(done_values) + 1,
+                           "startColumnIndex": 2, "endColumnIndex": 3},
+                "rows": rows_data,
+                "fields": "userEnteredValue,dataValidation",
+            }})
+
+    if requests:
+        sheets.spreadsheets().batchUpdate(spreadsheetId=SHEET_ID, body={"requests": requests}).execute()
+
+
+def _rebuild_dashboard(sheets, all_rows) -> list[bool]:
+    """Rebuild dashboard. Returns list of done booleans for checkbox formatting."""
     # Read existing dashboard to preserve checkbox state
     # Dashboard layout: Контакт(A), Тема(B), Готово(C), Статус(D), Что нужно сделать(E), Ответственный(F), Создано(G), Обновлено(H)
     existing_dash = sheets.spreadsheets().values().get(
@@ -196,6 +317,8 @@ def _rebuild_dashboard(sheets, all_rows):
         spreadsheetId=SHEET_ID, range="Дашборд!A1", valueInputOption="RAW",
         body={"values": [header] + rows},
     ).execute()
+
+    return [str(r[2]).upper() == "TRUE" for r in rows]
 
 
 def _rebuild_by_contact(sheets, all_rows):
