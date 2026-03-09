@@ -52,15 +52,12 @@ async def read_chats_today() -> int:
                 chat_title = getattr(entity, "title", None) or str(chat_id)
 
                 msgs = []
-                async for msg in client.iter_messages(
-                    entity,
-                    offset_date=now + timedelta(seconds=1),
-                    reverse=True,
-                ):
-                    if msg.date.astimezone(TZ) < start_of_day:
-                        continue
-                    if msg.date.astimezone(TZ) > now:
+                async for msg in client.iter_messages(entity, limit=500):
+                    msg_time = msg.date.astimezone(TZ)
+                    if msg_time < start_of_day:
                         break
+                    if msg_time > now:
+                        continue
 
                     # Skip empty, service, and bot messages
                     if not msg.text:

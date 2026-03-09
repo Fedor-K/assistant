@@ -31,10 +31,6 @@ async def daily_recap_job():
         today = datetime.now(TZ).strftime("%Y-%m-%d")
         new_messages = await get_unprocessed_messages(today)
 
-        if not new_messages:
-            print("[main] No new messages to recap")
-            return
-
         date_header = datetime.now(TZ).strftime("%d.%m.%Y")
 
         # Generate work report from completed tasks
@@ -57,9 +53,13 @@ async def daily_recap_job():
         email_text = format_emails_for_recap(emails)
 
         # Merge: add email text as a virtual "chat"
-        all_sources = dict(new_messages)
+        all_sources = dict(new_messages) if new_messages else {}
         if email_text:
             all_sources["Почта (Email)"] = [email_text]
+
+        if not all_sources:
+            print("[main] No new messages or emails to recap")
+            return
 
         # Sync structured data to Google Sheet
         existing_topics = get_existing_topics()
